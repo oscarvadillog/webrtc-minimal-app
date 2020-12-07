@@ -1,0 +1,16 @@
+{
+  "name": "webrtc-minimal-app",
+  "version": "0.0.1",
+  "description": "WebRTC Minimal App",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "webrtc",
+    "rtc",
+    "realtime"
+  ],
+  "author": "Óscar Vadillo",
+  "license": "ISC"
+}
