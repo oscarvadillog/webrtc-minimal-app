@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Minimal App</title>
+</head>
+<body>
+    <h1>WebRTC Minimal App</h1>
+
+    <video autoplay id="localVideo"></video>
+    <video autoplay id="remoteVideo"></video>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        (() => {
+            const localVideo = document.getElementById('localVideo');
+            const remoteVideo = document.getElementById('remoteVideo');
+            let localStream;
+            let remoteStream;
+            let rtcPeerConnection;
+            let callerNum;
+            const iceCfg = { iceSevers: [{ url: 'stun:stun.l.google.com:19302' }] };
+
+            let socket = io('/room');
+
+            socket.on('caller-num', n => {
+                if (!callerNum) {
+                    callerNum = n;
+                    console.log(`user ${n}`);
+                }
+            })
+
+            socket.on('connected', () => {
+                if (callerNum === 1) {
+                    rtcPeerConnection = new RTCPeerConnection(iceCfg);
+                    rtcPeerConnection.onicecandidate = onIceCandidate;
+                    rtcPeerConnection.onaddstream = onAddStream;
+                    rtcPeerConnection.addStream(localStream);
+                    rtcPeerConnection.createOffer(setLocalAndOffer, er => { console.error(er) });
+                }
+            })
+
+            socket.on('offer', event => {
+                if (callerNum === 2) {
+                    rtcPeerConnection = new RTCPeerConnection(iceCfg);
+                    rtcPeerConnection.onicecandidate = onIceCandidate;
+                    rtcPeerConnection.onaddstream = onAddStream;
+                    rtcPeerConnection.addStream(localStream);
+                    rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(event));
+                    rtcPeerConnection.createAnswer(setLocalAndAnswer, er => { console.error(er) });
+                }
+            })
+
+            socket.on('answer', event => {
+                rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(event));
+            })
+
+            socket.on('candidate', event => {
+                var candidate = new RTCIceCandidate({
+                    sdpMLineIndex: event.label,
+                    candidate: event.candidate,
+                });
+                rtcPeerConnection.addIceCandidate(candidate);
+            })
+
+            function onAddStream(event) {
+                remoteVideo.srcObject = event.stream;
+                remoteStream = event.stream;
+            }
+
+            function onIceCandidate(event) {
+                if (event.candidate) {
+                    console.log('sending ice candidate');
+                    socket.emit('candidate', {
+                        type: 'candidate',
+                        label: event.candidate.sdpMLineIndex,
+                        id: event.candidate.sdpMid,
+                        candidate: event.candidate.candidate,
+                    })
+                }
+            }
+
+            function setLocalAndOffer(sessionDescription) {
+                rtcPeerConnection.setLocalDescription(sessionDescription);
+                socket.emit('offer', {
+                    type: 'offer',
+                    sdp: sessionDescription,
+                });
+            }
+
+            function setLocalAndAnswer(sessionDescription) {
+                rtcPeerConnection.setLocalDescription(sessionDescription);
+                socket.emit('answer', {
+                    type: 'answer',
+                    sdp: sessionDescription,
+                });
+            }
+
+            navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                .then(stream => {
+                    localStream = stream;
+                    localVideo.srcObject = stream;
+                    socket.emit('got-media');
+                })
+                .catch(err => {
+                    console.error(err);
+                });
+
+        })();
+    </script>
+
+</body>
+</html>
