@@ -6,109 +6,159 @@
     <title>WebRTC Minimal App</title>
 </head>
 <body>
-    <h1>WebRTC Minimal App</h1>
-
-    <video autoplay id="localVideo"></video>
-    <video autoplay id="remoteVideo"></video>
-
+    <div id="app">
+        <br>
+        <button v-if="!clientId" @click="register">Register</button>
+        <span v-else>Client ID: {{ clientId }} || RemoteID: {{ remoteId }}</span>
+        <hr>
+        Users:
+        <ul>
+            <li v-for="(user, id) of users">
+                <ul @click="call(id)">{{ id }} : {{ user }}</ul>
+            </li>
+        </ul>
+        <button v-if="dc" @click="sendMsg">Send Message</button>
+        <br>
+        <video autoplay id="local-video"></video>
+        <video autoplay id="remote-video"></video>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2/dist/vue.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        (() => {
-            const localVideo = document.getElementById('localVideo');
-            const remoteVideo = document.getElementById('remoteVideo');
-            let localStream;
-            let remoteStream;
-            let rtcPeerConnection;
-            let callerNum;
-            const iceCfg = { iceSevers: [{ url: 'stun:stun.l.google.com:19302' }] };
 
-            let socket = io('/room');
-
-            socket.on('caller-num', n => {
-                if (!callerNum) {
-                    callerNum = n;
-                    console.log(`user ${n}`);
-                }
-            })
-
-            socket.on('connected', () => {
-                if (callerNum === 1) {
-                    rtcPeerConnection = new RTCPeerConnection(iceCfg);
-                    rtcPeerConnection.onicecandidate = onIceCandidate;
-                    rtcPeerConnection.onaddstream = onAddStream;
-                    rtcPeerConnection.addStream(localStream);
-                    rtcPeerConnection.createOffer(setLocalAndOffer, er => { console.error(er) });
-                }
-            })
-
-            socket.on('offer', event => {
-                if (callerNum === 2) {
-                    rtcPeerConnection = new RTCPeerConnection(iceCfg);
-                    rtcPeerConnection.onicecandidate = onIceCandidate;
-                    rtcPeerConnection.onaddstream = onAddStream;
-                    rtcPeerConnection.addStream(localStream);
-                    rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(event));
-                    rtcPeerConnection.createAnswer(setLocalAndAnswer, er => { console.error(er) });
-                }
-            })
-
-            socket.on('answer', event => {
-                rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(event));
-            })
-
-            socket.on('candidate', event => {
-                var candidate = new RTCIceCandidate({
-                    sdpMLineIndex: event.label,
-                    candidate: event.candidate,
-                });
-                rtcPeerConnection.addIceCandidate(candidate);
-            })
-
-            function onAddStream(event) {
-                remoteVideo.srcObject = event.stream;
-                remoteStream = event.stream;
-            }
-
-            function onIceCandidate(event) {
-                if (event.candidate) {
-                    console.log('sending ice candidate');
-                    socket.emit('candidate', {
-                        type: 'candidate',
-                        label: event.candidate.sdpMLineIndex,
-                        id: event.candidate.sdpMid,
-                        candidate: event.candidate.candidate,
+        const app = new Vue({
+            el: '#app',
+            data: {
+                iceServers: [{ url: 'stun:stun.l.google.com:19302' }],
+                signalling: null,
+                clientId: null,
+                remoteId: null,
+                users: {},
+                localStream: null,
+                pc: null,
+                dc: null,
+            },
+            mounted() {},
+            methods: {
+                sendMsg() {
+                    this.dc.send('Hey');
+                },
+                accessDevices() {
+                    return new Promise((res, rej) => {
+                        navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                        .then(stream => {
+                            this.localStream = stream;
+                            const localVideo = document.getElementById('local-video');
+                            localVideo.srcObject = stream;
+                            res();
+                        })
+                        .catch(err => {
+                            console.error(err);
+                            rej();
+                        });
                     })
-                }
+                },
+                call(id) {
+                    this.remoteId = id;
+                    this.signalling.emit('call', id);
+                    this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
+                    this.dc = this.pc.createDataChannel('DATACHAN');
+                    this.pc.ondatachannel = this.onDataChannel;
+                    this.pc.onicecandidate = this.onIceCandidate;
+                    this.pc.onaddstream = this.onAddStream;
+                    this.pc.addStream(this.localStream);
+                    this.pc.createOffer(this.setLocalAndOffer, er => { console.error(er) });
+                },
+                onAddStream(event) {
+                    const remoteVideo = document.getElementById('remote-video');
+                    remoteVideo.srcObject = event.stream;
+                },
+                onIceCandidate(event) {
+                    if (event.candidate) {
+                        // Sending ice candidate
+                        this.signalling.emit('candidate', {
+                            type: 'candidate',
+                            label: event.candidate.sdpMLineIndex,
+                            id: event.candidate.sdpMid,
+                            candidate: event.candidate.candidate,
+                            to: this.remoteId,
+                        })
+                    }
+                },
+                onDataChannel(event) {
+                    const { channel } = event;
+                    channel.onopen = () => {
+                        console.log('Datachannel Opened');
+                    }
+                    channel.onclose = () => {
+                        console.log('Datachannel Closed');
+                    }
+                    channel.onmessage = event => {
+                        console.log(`Message received: ${event.data}`);
+                    }
+                    channel.onerror = error => {
+                        console.error(error);
+                    }
+                },
+                setLocalAndOffer(sdp) {
+                    this.pc.setLocalDescription(sdp);
+                    this.signalling.emit('offer', { type: 'offer', sdp, to: this.remoteId });
+                },
+                setLocalAndAnswer(sdp) {
+                    this.pc.setLocalDescription(sdp);
+                    this.signalling.emit('answer', { type: 'answer', sdp, to: this.remoteId });
+                },
+                register() {
+                    this.signalling = io('/videocall');
+
+                    this.signalling.on('registered', clientId => {
+                        this.clientId = clientId;
+                        this.accessDevices();
+                        setInterval(() => {
+                            this.signalling.emit('get-users');
+                        }, 1000)
+                    })
+
+                    this.signalling.on('got-users', users => {
+                        this.users = users;
+                    })
+
+                    this.signalling.on('calling', origin => {
+                        this.remoteId = origin;
+                        console.log(`Incoming call from ${this.remoteId}`);
+                    })
+
+                    this.signalling.on('offer', event => {
+                        console.log('offer', event);
+                        this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
+                        this.dc = this.pc.createDataChannel('DATACHAN');
+                        this.pc.ondatachannel = this.onDataChannel;
+                        this.pc.onicecandidate = this.onIceCandidate;
+                        this.pc.onaddstream = this.onAddStream;
+                        this.pc.addStream(this.localStream);
+                        this.pc.setRemoteDescription(new RTCSessionDescription(event));
+                        this.pc.createAnswer(this.setLocalAndAnswer, er => { console.error(er) });
+                    })
+
+                    this.signalling.on('answer', event => {
+                        console.log('answer', event);
+                        this.pc.setRemoteDescription(new RTCSessionDescription(event));
+                    })
+
+                    this.signalling.on('candidate', event => {
+                        const candidate = new RTCIceCandidate({
+                            sdpMLineIndex: event.label,
+                            candidate: event.candidate,
+                        });
+                        console.log(`Adding candidate:`);
+                        console.log(candidate);
+                        this.pc.addIceCandidate(candidate);
+                    })
+
+                },
+
             }
-
-            function setLocalAndOffer(sessionDescription) {
-                rtcPeerConnection.setLocalDescription(sessionDescription);
-                socket.emit('offer', {
-                    type: 'offer',
-                    sdp: sessionDescription,
-                });
-            }
-
-            function setLocalAndAnswer(sessionDescription) {
-                rtcPeerConnection.setLocalDescription(sessionDescription);
-                socket.emit('answer', {
-                    type: 'answer',
-                    sdp: sessionDescription,
-                });
-            }
-
-            navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-                .then(stream => {
-                    localStream = stream;
-                    localVideo.srcObject = stream;
-                    socket.emit('got-media');
-                })
-                .catch(err => {
-                    console.error(err);
-                });
-
-        })();
+        })
     </script>
-
 </body>
 </html>

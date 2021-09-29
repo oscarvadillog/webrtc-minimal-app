@@ -2,46 +2,47 @@ const express = require('express');
 const path = require('path');
 const app = express();
 const http = require('http').Server(app);
-const io = require('socket.io')(http);
+const sockio = require('socket.io')(http);
 const port = 3000;
-const resource = 'room';
+const resource = 'videocall';
 
-let ns = io.of(`/${resource}`);
+let io = sockio.of(`/${resource}`);
 
-let users = 0;
-let mediaFlag = 0;
+let users = {};
 
-ns.on('connection', conn => {
-    users++;
-    console.log(`User connected | Total: ${users}`);
+io.on('connection', socket => {
+    users[socket.id] = { status: 'AVAILABLE' };
 
-    ns.emit('caller-num', users);
+    console.log(`User connected: ${socket.id}`);
 
-    conn.on('got-media', () => {
-        mediaFlag++;
-        if (users === 2 && mediaFlag === 2) {
-            console.log('Emitting ');
-            ns.emit('connected');
-        }
-        console.log(`Got media ${mediaFlag}`);
+    socket.emit('registered', socket.id);
+
+    socket.on('get-users', () => {
+        socket.emit('got-users', users);
     });
 
-    conn.on('candidate', event => {
-        conn.broadcast.emit('candidate', event);
+    socket.on('disconnect', () => {
+        console.log(`User disconnected: ${socket.id}`);
+        delete users[socket.id];
     })
 
-    conn.on('offer', event => {
-        conn.broadcast.emit('offer', event.sdp);
+    socket.on('call', destination => {
+        console.log(`User ${socket.id} is calling to ${destination}`);
+        users[socket.id] = { status: 'INCALL', to: destination };
+        users[destination] = { status: 'INCALL', to: socket.id };
+        socket.to(destination).emit('calling', socket.id);
+    });
+
+    socket.on('offer', event => {
+        socket.to(event.to).emit('offer', event.sdp);
     })
 
-    conn.on('answer', event => {
-        conn.broadcast.emit('answer', event.sdp);
+    socket.on('answer', event => {
+        socket.to(event.to).emit('answer', event.sdp);
     })
 
-    conn.on('disconnect', () => {
-        console.log('User disconnected');
-        users--;
-        console.log(users);
+    socket.on('candidate', event => {
+        socket.to(event.to).emit('candidate', event);
     })
 
 })
